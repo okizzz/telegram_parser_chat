@@ -1,103 +1,91 @@
-#!/usr/bin/env python3.6
+#!/usr/bin/env python3.8
 
-import os
-import sys
-from getpass import getpass
-from time import sleep
+from telethon.sync import TelegramClient
+from telethon import functions, types
+from telethon import types
 from datetime import datetime
+from datetime import timedelta
+import os
 
-from telethon import TelegramClient
-from telethon.errors import SessionPasswordNeededError
-from telethon.errors.rpc_errors_400 import UsernameNotOccupiedError
-from telethon.errors.rpc_errors_420 import FloodWaitError
-from telethon.tl.functions.channels import GetParticipantsRequest
-from telethon.tl.functions.contacts import ResolveUsernameRequest
-from telethon.tl.types import ChannelParticipantsSearch, InputChannel
-from telethon.tl.functions.channels import GetFullChannelRequest
-from telethon.tl.functions.users import GetUsersRequest
-
-# First you need create app on https://my.telegram.org
-api_id = 12834
-api_hash = 'c84d9229db1d6be95c067b02b126352c'
-phone = '+77778178413'
-limit = 200
+client = TelegramClient('my_connect', 12834, 'c84d9229db1d6be95c067b02b126352c')
+limit = 100
+days_of_activity = 7
+alphabet = ('a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z')
 with open ('chats_list.txt') as file:
     chats_list=file.readlines()
 
-with open ('alphabet.txt') as file:
-    alphabet=file.readlines()
-
-def get_chat_info(username, client):
-    try:
-        chat = client(ResolveUsernameRequest(username))
-    except UsernameNotOccupiedError:
-        print('Chat/channel not found!')
-        sys.exit()
-    result = {
-        'chat_id': chat.peer.channel_id,
-        'access_hash': chat.chats[0].access_hash
-    }
-    return result
-
-def dump_users(chat, client, chat_name, letter):
+async def parser(chat, letter):
     counter = 0
     offset = 0
-    chat_object = InputChannel(chat['chat_id'], chat['access_hash'])
     all_participants = []
-    print(f'Process... letter: {letter}')
     while True:
-        participants = client.invoke(GetParticipantsRequest(
-                    chat_object, ChannelParticipantsSearch(letter), offset, limit
-                ))
+        participants = await client(functions.channels.GetParticipantsRequest(channel = chat, filter = types.ChannelParticipantsSearch(letter), offset = offset, limit = limit, hash = 0))
         if not participants.users:
             break
-        all_participants.extend(['{} {}'.format(x.username, x.status)
-                           for x in participants.users])
+        for x in participants.users:
+            if x.username != None:
+                all_participants.append([x.username, x.status])
         users_count = len(participants.users)
-        offset += users_count
         counter += users_count
-        print('{} users collected'.format(counter))
-        #sleep(0.5)
-    with open(f'{chat_name}_users.txt', 'a') as file:
-        file.write('\n'.join(map(str, all_participants)))
+        offset += users_count
+        print(f'users collected {counter}')
+    return all_participants
 
-def participants_count(client, chat):
-     chat_object = InputChannel(chat['chat_id'], chat['access_hash'])
-     chat_full = client.invoke(GetFullChannelRequest(chat_object))
-     part_count = chat_full.full_chat.participants_count
-     print(f'Participants count: {part_count}')
-     return (part_count)
+def save_result(participants, days, chatname):
+    time_limit = (datetime.utcnow() - timedelta(days=days)).strftime('%Y-%m-%d %H:%M:%S')
+    users_recently = []
+    users_actual = []
+    users_other = []
+    for participant in participants:
+        try:
+            if str(participant[1]).startswith('UserStatusRecen'):
+                users_recently.append(participant[0])
+            elif str(participant[1]).startswith('UserStatusOnline'):
+                users_actual.append(participant[0])
+            elif participant[1].was_online.strftime('%Y-%m-%d %H:%M:%S') >= time_limit:
+                users_actual.append(participant[0])
+            else:
+                users_other.append(participant[0])
+                pass
+        except: 
+            pass
+    try:
+        os.makedirs(f'./{chatname}')
+    except FileExistsError:
+        pass
+    del_double_recently = list(set(users_recently))
+    del_double_actual = list(set(users_actual))
+    del_double_other = list(set(users_other))
+    print(f'Users_recently: {len(del_double_recently)}')
+    with open(f'{chatname}/users_recently.txt', 'a') as file:
+        file.write('\n'.join(map(str, users_recently)))
+    print(f'Users_actual: {len(del_double_actual)}')
+    with open(f'{chatname}/users_actual.txt', 'a') as file:
+        file.write('\n'.join(map(str, del_double_actual)))
+    print(f'Users_other: {len(del_double_other)}')
+    with open(f'{chatname}/users_other.txt', 'a') as file:
+        file.write('\n'.join(map(str, del_double_other)))
 
-def main():
+async def main():
     for chat_name in chats_list:
         chat_name = chat_name.replace('\n', '')
-        client = TelegramClient('current-session', api_id, api_hash)
-        print('Connecting...')
-        print(f'Chat: {chat_name}')
-        client.connect()
-        if not client.is_user_authorized():
-            try:
-                client.send_code_request(phone)
-                print('Sending a code...')
-                client.sign_in(phone, code=input('Enter code: '))
-                print('Successfully!')
-            except FloodWaitError as FloodError:
-                print('Flood wait: {}.'.format(FloodError))
-                sys.exit()
-            except SessionPasswordNeededError:
-                client.sign_in(password=getpass('Enter password: '))
-                print('Successfully!')
-                print(participants_count)
-        if participants_count(client, get_chat_info(chat_name, client)) > 11000:
+        chat_info = await client(functions.channels.GetFullChannelRequest(chat_name))
+        number_participants = chat_info.full_chat.participants_count
+        print(f'Chat name: {chat_name}. Number of users: {number_participants}')
+        if number_participants > 11000:
+            print('Alphabetical work')
+            joinusers = []
             for letter in alphabet:
-                letter = letter.replace('\n', '')
-                dump_users(get_chat_info(chat_name, client), client, chat_name, letter)
+                print(f'Letter: {letter}')
+                users = await parser(chat_name, letter)
+                joinusers += users
+            save_result(joinusers, days_of_activity, chat_name)
         else:
-            dump_users(get_chat_info(chat_name, client), client, chat_name, '')
-        print('Done!')
+            print('Ordinary work')
+            users = await parser(chat_name, '')
+            save_result(users, days_of_activity, chat_name)
 
-if __name__ == '__main__':
-    main()
-
+with client:
+    client.loop.run_until_complete(main())
 
 
